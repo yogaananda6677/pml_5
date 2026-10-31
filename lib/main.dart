@@ -26,6 +26,35 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
   debugPrint('Handling background message: ${message.messageId}');
+
+  // Jika pesan adalah data-only (tanpa payload notification bawaan), tampilkan notifikasi lokal
+  if (message.notification == null && message.data.isNotEmpty) {
+    final plugin = FlutterLocalNotificationsPlugin();
+    const initSettings = InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    );
+    await plugin.initialize(settings: initSettings);
+    String title = message.data['title'] ??
+        (message.data.containsKey('promo') ? 'Promo Diskon' : 'Notifikasi Promo');
+    String body = message.data['body'] ??
+        message.data['promo'] ??
+        'Pesan data baru diterima';
+    await plugin.show(
+      id: message.hashCode,
+      title: title,
+      body: body,
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'INFO_DISKON_DAN_PROMO',
+          'INFO_DISKON_DAN_PROMO',
+          channelDescription: 'Channel untuk notifikasi diskon dan promo',
+          icon: '@mipmap/ic_launcher',
+          importance: Importance.max,
+          priority: Priority.high,
+        ),
+      ),
+    );
+  }
 }
 
 void main() async {
@@ -57,6 +86,13 @@ void main() async {
   // In-App Messaging initial setup
   await FirebaseInAppMessaging.instance.setAutomaticDataCollectionEnabled(true);
   await FirebaseInAppMessaging.instance.setMessagesSuppressed(false);
+
+  // Enable foreground notification presentation options
+  await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+    alert: true,
+    badge: true,
+    sound: true,
+  );
 
   runApp(const MyApp());
 }
@@ -128,6 +164,12 @@ class _FcmHomeScreenState extends State<FcmHomeScreen> {
       badge: true,
       sound: true,
     );
+
+    // Minta izin runtime notifikasi Android 13+ secara eksplisit
+    await flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
 
     if (mounted) {
       if (settings.authorizationStatus == AuthorizationStatus.authorized) {
@@ -210,26 +252,32 @@ class _FcmHomeScreenState extends State<FcmHomeScreen> {
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       _processIncomingMessage(message, source: 'Foreground');
 
-      // Tampilkan notifikasi lokal heads-up
-      RemoteNotification? notification = message.notification;
-      AndroidNotification? android = message.notification?.android;
-      if (notification != null && android != null) {
-        flutterLocalNotificationsPlugin.show(
-          id: notification.hashCode,
-          title: notification.title,
-          body: notification.body,
-          notificationDetails: NotificationDetails(
-            android: AndroidNotificationDetails(
-              channel.id,
-              channel.name,
-              channelDescription: channel.description,
-              icon: '@mipmap/ic_launcher',
-              importance: Importance.high,
-              priority: Priority.high,
-            ),
+      // Ambil judul dan isi notifikasi, baik dari payload notification maupun data
+      String title = message.notification?.title ??
+          message.data['title'] ??
+          (message.data.containsKey('promo') ? 'Promo Diskon' : 'Notifikasi Masuk');
+      String body = message.notification?.body ??
+          message.data['body'] ??
+          message.data['promo'] ??
+          'Ada pesan baru yang diterima';
+
+      flutterLocalNotificationsPlugin.show(
+        id: message.hashCode,
+        title: title,
+        body: body,
+        notificationDetails: NotificationDetails(
+          android: AndroidNotificationDetails(
+            channel.id,
+            channel.name,
+            channelDescription: channel.description,
+            icon: '@mipmap/ic_launcher',
+            importance: Importance.max,
+            priority: Priority.high,
+            playSound: true,
+            enableVibration: true,
           ),
-        );
-      }
+        ),
+      );
     });
   }
 
@@ -320,54 +368,13 @@ class _FcmHomeScreenState extends State<FcmHomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Topic Status Card
-              Card(
-                color: _isSubscribed ? Colors.green.shade50 : Colors.orange.shade50,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  side: BorderSide(
-                    color: _isSubscribed
-                        ? Colors.green.shade300
-                        : Colors.orange.shade300,
-                  ),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Row(
-                    children: [
-                      Icon(
-                        _isSubscribed
-                            ? Icons.check_circle_rounded
-                            : Icons.info_outline_rounded,
-                        color: _isSubscribed ? Colors.green : Colors.orange,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          _subscriptionStatus,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: _isSubscribed
-                                ? Colors.green.shade900
-                                : Colors.orange.shade900,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 14),
 
               // Token / Application ID
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text(
-                    'Token / Application ID (FCM)',
+                    'Token / Application ID',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
@@ -402,89 +409,6 @@ class _FcmHomeScreenState extends State<FcmHomeScreen> {
                     borderRadius: BorderRadius.circular(8),
                     borderSide: BorderSide(color: Colors.grey.shade300),
                   ),
-                ),
-              ),
-
-              const SizedBox(height: 14),
-
-              // Installation ID (PML 06 - In-App Messaging)
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF3E5F5), // Light purple
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFFCE93D8)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Row(
-                          children: [
-                            Icon(Icons.campaign,
-                                color: Color(0xFF7B1FA2), size: 20),
-                            SizedBox(width: 6),
-                            Text(
-                              'Installation ID (PML 06)',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF7B1FA2),
-                              ),
-                            ),
-                          ],
-                        ),
-                        IconButton(
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                          icon: const Icon(Icons.copy,
-                              size: 18, color: Color(0xFF7B1FA2)),
-                          tooltip: 'Salin Installation ID',
-                          onPressed: () => _copyToClipboard(
-                            _installationIdController.text,
-                            'Installation ID',
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: _installationIdController,
-                      readOnly: true,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                        fontWeight: FontWeight.bold,
-                      ),
-                      decoration: InputDecoration(
-                        hintText: 'Memuat Installation ID...',
-                        isDense: true,
-                        filled: true,
-                        fillColor: Colors.white,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6),
-                          borderSide:
-                              const BorderSide(color: Color(0xFFCE93D8)),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6),
-                          borderSide:
-                              const BorderSide(color: Color(0xFFCE93D8)),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Gunakan ID ini untuk "Test on device" pada In-App Messaging di Firebase Console.',
-                      style: TextStyle(fontSize: 11, color: Colors.black87),
-                    ),
-                  ],
                 ),
               ),
 
@@ -618,54 +542,6 @@ class _FcmHomeScreenState extends State<FcmHomeScreen> {
                     horizontal: 12,
                     vertical: 10,
                   ),
-                ),
-              ),
-
-              const SizedBox(height: 20),
-
-              // Action buttons (Reset / Refresh / Trigger Event)
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        setState(() {
-                          _titleController.clear();
-                          _bodyController.clear();
-                          _promoIdController.clear();
-                          _promoController.clear();
-                          _promoUntilController.clear();
-                        });
-                      },
-                      icon: const Icon(Icons.clear_all),
-                      label: const Text('Clear Form'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1565C0),
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: () => _initializeServices(),
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Refresh'),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF7B1FA2),
-                    side: const BorderSide(color: Color(0xFF7B1FA2)),
-                  ),
-                  onPressed: _triggerOnForegroundEvent,
-                  icon: const Icon(Icons.touch_app),
-                  label: const Text('Trigger Event "on_foreground"'),
                 ),
               ),
             ],
